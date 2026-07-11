@@ -1,5 +1,6 @@
 #include <fstream>
 #include <cmath>
+#include <algorithm>
 
 struct CRTVector {
     float x, y, z;
@@ -28,13 +29,6 @@ static const int imageWidth = 1920;
 static const int imageHeight = 1080;
 static const int maxColorComponent = 255;
 
-int clampColor(float value) {
-    int v = static_cast<int>(value);
-    if (v < 0) v = 0;
-    if (v > maxColorComponent) v = maxColorComponent;
-    return v;
-}
-
 CRTVector generateRayDirection(int x, int y, int width, int height) {
     float fx = static_cast<float>(x) + 0.5f;
     float fy = static_cast<float>(y) + 0.5f;
@@ -62,9 +56,9 @@ int main() {
             CRTVector rayDir = generateRayDirection(colIdx, rowIdx, imageWidth, imageHeight);
 
             CRTColor color(
-                clampColor((rayDir.x * 0.5f + 0.5f) * maxColorComponent),
-                clampColor((rayDir.y * 0.5f + 0.5f) * maxColorComponent),
-                clampColor((rayDir.z * 0.5f + 0.5f) * maxColorComponent)
+                std::clamp(static_cast<int>((rayDir.x * 0.5f + 0.5f) * maxColorComponent), 0, maxColorComponent),
+                std::clamp(static_cast<int>((rayDir.y * 0.5f + 0.5f) * maxColorComponent), 0, maxColorComponent),
+                std::clamp(static_cast<int>((rayDir.z * 0.5f + 0.5f) * maxColorComponent), 0, maxColorComponent)
             );
 
             ppmFileStream << color.r << " " << color.g << " " << color.b << "\t";
