@@ -13,9 +13,11 @@ struct CRTTriangle {
     CRTVector v0, v1, v2;
     CRTVector normal;
     CRTColor color;
+    CRTVector albedo;
 
-    CRTTriangle(const CRTVector& v0, const CRTVector& v1, const CRTVector& v2, const CRTColor& color)
-        : v0(v0), v1(v1), v2(v2), color(color) {
+    CRTTriangle(const CRTVector& v0, const CRTVector& v1, const CRTVector& v2, const CRTColor& color,
+                const CRTVector& albedo = CRTVector(0.7f, 0.7f, 0.7f))
+        : v0(v0), v1(v1), v2(v2), color(color), albedo(albedo) {
         CRTVector e0 = v1 - v0;
         CRTVector e1 = v2 - v0;
         normal = cross(e0, e1).normalize();

@@ -99,11 +99,12 @@ void runCameraDemo(int width, int height) {
 
 void runSceneFile(const std::string& inputPath, const std::string& outputPath) {
     SceneData scene = loadScene(inputPath);
-    std::cout << "HW07 - Scene: loaded " << scene.triangles.size() << " triangles, "
+    std::cout << "Scene: loaded " << scene.triangles.size() << " triangles, "
+              << scene.lights.size() << " lights, "
               << scene.imageWidth << "x" << scene.imageHeight << "\n";
 
     renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                scene.backgroundColor, outputPath);
+                scene.backgroundColor, outputPath, scene.lights);
     std::cout << "Rendered to " << outputPath << "\n";
 }
 

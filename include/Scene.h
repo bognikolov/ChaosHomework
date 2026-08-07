@@ -9,6 +9,7 @@
 #include "CRTColor.h"
 #include "Triangle.h"
 #include "Camera.h"
+#include "Light.h"
 
 struct SceneData {
     int imageWidth = 1920;
@@ -16,6 +17,7 @@ struct SceneData {
     CRTColor backgroundColor;
     Camera camera;
     std::vector<CRTTriangle> triangles;
+    std::vector<Light> lights;
 };
 
 inline CRTColor triangleColorFromIndex(size_t index) {
@@ -28,6 +30,19 @@ inline CRTColor triangleColorFromIndex(size_t index) {
         CRTColor(60, 220, 220)
     };
     return palette[index % 6];
+}
+
+inline CRTVector albedoFromIndex(size_t index) {
+    static const CRTVector palette[] = {
+        CRTVector(0.9f, 0.2f, 0.2f),
+        CRTVector(0.2f, 0.9f, 0.2f),
+        CRTVector(0.2f, 0.2f, 0.9f),
+        CRTVector(0.9f, 0.9f, 0.2f),
+        CRTVector(0.9f, 0.2f, 0.9f),
+        CRTVector(0.2f, 0.9f, 0.9f),
+        CRTVector(0.85f, 0.85f, 0.85f)
+    };
+    return palette[index % 7];
 }
 
 inline SceneData loadScene(const std::string& path) {
@@ -85,6 +100,19 @@ inline SceneData loadScene(const std::string& path) {
         }
     }
 
+    if (doc.HasMember("lights")) {
+        const auto& lights = doc["lights"];
+        for (rapidjson::SizeType i = 0; i < lights.Size(); ++i) {
+            const auto& light = lights[i];
+            const auto& pos = light["position"];
+            float intensity = light["intensity"].GetFloat();
+            scene.lights.push_back(Light(
+                CRTVector(pos[0].GetFloat(), pos[1].GetFloat(), pos[2].GetFloat()),
+                intensity
+            ));
+        }
+    }
+
     if (doc.HasMember("objects")) {
         const auto& objects = doc["objects"];
         for (rapidjson::SizeType objIdx = 0; objIdx < objects.Size(); ++objIdx) {
@@ -107,8 +135,9 @@ inline SceneData loadScene(const std::string& path) {
                 int i2 = tris[i + 2].GetInt();
 
                 CRTColor color = triangleColorFromIndex(scene.triangles.size());
+                CRTVector albedo = albedoFromIndex(scene.triangles.size());
                 scene.triangles.push_back(
-                    CRTTriangle(vertices[i0], vertices[i1], vertices[i2], color)
+                    CRTTriangle(vertices[i0], vertices[i1], vertices[i2], color, albedo)
                 );
             }
         }
