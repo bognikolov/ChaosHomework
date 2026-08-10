@@ -20,13 +20,32 @@ struct CRTVector {
         return CRTVector(x * s, y * s, z * s);
     }
 
+    CRTVector operator*(const CRTVector& other) const {
+        return CRTVector(x * other.x, y * other.y, z * other.z);
+    }
+
+    CRTVector operator-() const {
+        return CRTVector(-x, -y, -z);
+    }
+
+    CRTVector& operator+=(const CRTVector& other) {
+        x += other.x; y += other.y; z += other.z;
+        return *this;
+    }
+
     float length() const {
         return std::sqrt(x * x + y * y + z * z);
     }
 
     CRTVector normalize() const {
         float len = length();
-        return CRTVector(x / len, y / len, z / len);
+        if (len < 1e-8f) {
+            // Degenerate (zero-length) input has no defined direction; returning
+            // a zero vector is safer than dividing by ~0 and propagating inf/NaN.
+            return CRTVector(0.0f, 0.0f, 0.0f);
+        }
+        float invLen = 1.0f / len;
+        return CRTVector(x * invLen, y * invLen, z * invLen);
     }
 };
 
@@ -49,4 +68,10 @@ inline CRTVector cross(const CRTVector& a, const CRTVector& b) {
 
 inline bool almostEqual(float a, float b, float epsilon = 1e-4f) {
     return std::fabs(a - b) < epsilon;
+}
+
+// Reflects an incoming direction `incoming` about `normal` (both should point "away" consistently;
+// normal is assumed normalized). Standard mirror reflection: r = d - 2*(d.n)*n
+inline CRTVector reflect(const CRTVector& incoming, const CRTVector& normal) {
+    return incoming - normal * (2.0f * dot(incoming, normal));
 }

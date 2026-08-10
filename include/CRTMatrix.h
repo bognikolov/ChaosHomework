@@ -16,11 +16,19 @@ struct CRTMatrix3x3 {
                 m[i][j] = (i == j) ? 1.0f : 0.0f;
     }
 
+private:
+    // Tag type used to construct a matrix without paying for the identity-fill
+    // work in the default constructor, for call sites that immediately
+    // overwrite all 9 elements anyway (e.g. the rotationX/Y/Z factories below).
+    struct Uninitialized {};
+    explicit CRTMatrix3x3(Uninitialized) {}
+
+public:
     static CRTMatrix3x3 rotationX(float degrees) {
         float rad = toRadians(degrees);
         float c = std::cos(rad);
         float s = std::sin(rad);
-        CRTMatrix3x3 mat;
+        CRTMatrix3x3 mat{Uninitialized{}};
         mat.m[0][0] = 1; mat.m[0][1] = 0; mat.m[0][2] = 0;
         mat.m[1][0] = 0; mat.m[1][1] = c; mat.m[1][2] = -s;
         mat.m[2][0] = 0; mat.m[2][1] = s; mat.m[2][2] = c;
@@ -31,7 +39,7 @@ struct CRTMatrix3x3 {
         float rad = toRadians(degrees);
         float c = std::cos(rad);
         float s = std::sin(rad);
-        CRTMatrix3x3 mat;
+        CRTMatrix3x3 mat{Uninitialized{}};
         mat.m[0][0] = c;  mat.m[0][1] = 0; mat.m[0][2] = s;
         mat.m[1][0] = 0;  mat.m[1][1] = 1; mat.m[1][2] = 0;
         mat.m[2][0] = -s; mat.m[2][1] = 0; mat.m[2][2] = c;
@@ -42,7 +50,7 @@ struct CRTMatrix3x3 {
         float rad = toRadians(degrees);
         float c = std::cos(rad);
         float s = std::sin(rad);
-        CRTMatrix3x3 mat;
+        CRTMatrix3x3 mat{Uninitialized{}};
         mat.m[0][0] = c; mat.m[0][1] = -s; mat.m[0][2] = 0;
         mat.m[1][0] = s; mat.m[1][1] = c;  mat.m[1][2] = 0;
         mat.m[2][0] = 0; mat.m[2][1] = 0;  mat.m[2][2] = 1;
@@ -58,7 +66,7 @@ struct CRTMatrix3x3 {
     }
 
     CRTMatrix3x3 operator*(const CRTMatrix3x3& other) const {
-        CRTMatrix3x3 result;
+        CRTMatrix3x3 result{Uninitialized{}};
         for (int i = 0; i < 3; ++i) {
             for (int j = 0; j < 3; ++j) {
                 result.m[i][j] = 0.0f;

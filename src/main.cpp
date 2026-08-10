@@ -5,13 +5,13 @@
 #include "CRTVector.h"
 #include "CRTMatrix.h"
 #include "Triangle.h"
+#include "Material.h"
 #include "Camera.h"
 #include "Renderer.h"
 #include "Scene.h"
 
 void runRays(int width, int height) {
     Camera camera;
-    std::vector<CRTTriangle> noTriangles;
 
     std::ofstream ppmFileStream("output_rays.ppm", std::ios::out | std::ios::binary);
     ppmFileStream << "P3\n" << width << " " << height << "\n255\n";
@@ -47,8 +47,7 @@ void runTriangleMath() {
     CRTTriangle t1(
         CRTVector(-1.75f, -1.75f, -3.0f),
         CRTVector(1.75f, -1.75f, -3.0f),
-        CRTVector(0.0f, 1.75f, -3.0f),
-        CRTColor(220, 60, 60)
+        CRTVector(0.0f, 1.75f, -3.0f)
     );
     assert(almostEqual(t1.area(), 6.125f, 1e-3f));
     std::cout << "Triangle normal: " << t1.normal << " Area: " << t1.area() << "\n";
@@ -58,54 +57,113 @@ void runTriangleMath() {
 
 void runClosestHit(int width, int height) {
     std::vector<CRTTriangle> scene;
+    std::vector<Material> materials = {
+        Material{MaterialType::Diffuse, CRTVector(220 / 255.0f, 60 / 255.0f, 60 / 255.0f), false},
+        Material{MaterialType::Diffuse, CRTVector(60 / 255.0f, 220 / 255.0f, 60 / 255.0f), false},
+        Material{MaterialType::Diffuse, CRTVector(60 / 255.0f, 60 / 255.0f, 220 / 255.0f), false},
+        Material{MaterialType::Diffuse, CRTVector(220 / 255.0f, 220 / 255.0f, 60 / 255.0f), false},
+    };
+
     CRTVector apex(0.0f, 1.2f, -4.0f);
     CRTVector base1(-1.3f, -0.8f, -3.0f);
     CRTVector base2(1.3f, -0.8f, -3.0f);
     CRTVector base3(0.0f, -0.8f, -5.0f);
 
-    scene.push_back(CRTTriangle(apex, base1, base2, CRTColor(220, 60, 60)));
-    scene.push_back(CRTTriangle(apex, base2, base3, CRTColor(60, 220, 60)));
-    scene.push_back(CRTTriangle(apex, base3, base1, CRTColor(60, 60, 220)));
-    scene.push_back(CRTTriangle(base1, base3, base2, CRTColor(220, 220, 60)));
+    scene.push_back(CRTTriangle(apex, base1, base2, 0));
+    scene.push_back(CRTTriangle(apex, base2, base3, 1));
+    scene.push_back(CRTTriangle(apex, base3, base1, 2));
+    scene.push_back(CRTTriangle(base1, base3, base2, 3));
+
+    // This legacy demo predates the materials system and just showed flat face
+    // colors with no lighting. Diffuse shading needs at least one light to be
+    // visible at all, so we add a simple point light here to keep the same look.
+    std::vector<Light> lights = { Light(CRTVector(0.0f, 2.0f, 0.0f), 50.0f) };
 
     Camera camera;
-    renderScene(camera, scene, width, height, CRTColor(30, 30, 30), "output_intersect.ppm");
+    renderScene(camera, scene, width, height, CRTColor(30, 30, 30), "output_intersect.ppm", lights, materials);
     std::cout << "HW05 - Closest hit: rendered output_intersect.ppm\n";
 }
 
 void runCameraDemo(int width, int height) {
     std::vector<CRTTriangle> scene;
+    std::vector<Material> materials = {
+        Material{MaterialType::Diffuse, CRTVector(220 / 255.0f, 60 / 255.0f, 60 / 255.0f), false},
+        Material{MaterialType::Diffuse, CRTVector(60 / 255.0f, 220 / 255.0f, 60 / 255.0f), false},
+    };
+
     scene.push_back(CRTTriangle(
         CRTVector(-1.75f, -1.75f, -3.0f), CRTVector(1.75f, -1.75f, -3.0f),
-        CRTVector(0.0f, 1.75f, -3.0f), CRTColor(220, 60, 60)
+        CRTVector(0.0f, 1.75f, -3.0f), 0
     ));
     scene.push_back(CRTTriangle(
         CRTVector(-3.5f, -1.0f, -6.0f), CRTVector(-1.5f, -1.0f, -6.0f),
-        CRTVector(-2.5f, 1.0f, -6.0f), CRTColor(60, 220, 60)
+        CRTVector(-2.5f, 1.0f, -6.0f), 1
     ));
+
+    std::vector<Light> lights = { Light(CRTVector(0.0f, 2.0f, 2.0f), 50.0f) };
 
     Camera camera;
     CRTColor bg(30, 30, 30);
-    renderScene(camera, scene, width, height, bg, "output_camera_before.ppm");
+    renderScene(camera, scene, width, height, bg, "output_camera_before.ppm", lights, materials);
 
     camera.pan(25.0f);
     camera.tilt(-10.0f);
     camera.truck(0.8f);
     camera.dolly(-0.5f);
 
-    renderScene(camera, scene, width, height, bg, "output_camera_after.ppm");
+    renderScene(camera, scene, width, height, bg, "output_camera_after.ppm", lights, materials);
     std::cout << "HW06 - Camera movement: rendered before/after images\n";
 }
 
 void runSceneFile(const std::string& inputPath, const std::string& outputPath) {
     SceneData scene = loadScene(inputPath);
     std::cout << "Scene: loaded " << scene.triangles.size() << " triangles, "
-              << scene.lights.size() << " lights, "
+              << scene.lights.size() << " lights, " << scene.materials.size() << " materials, "
               << scene.imageWidth << "x" << scene.imageHeight << "\n";
 
     renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                scene.backgroundColor, outputPath, scene.lights);
+                scene.backgroundColor, outputPath, scene.lights, scene.materials);
     std::cout << "Rendered to " << outputPath << "\n";
+}
+
+// HW09 - Shading 01:
+//   Task 1 (scene0, scene1): color pixels by barycentric coordinates of the hit.
+//   Task 2 (scene2, scene3): shade using each object's material (diffuse albedo + smooth shading).
+//   Task 3 (scene4, scene5): same, but materials may be reflective (recursive mirror bounces).
+// All three tasks share the same renderScene() pipeline; only Task 1 needs the special
+// Barycentric debug mode since it explicitly ignores materials/lighting.
+void runHw09(const std::string& scenesDir, const std::string& outDir) {
+    struct SceneJob {
+        std::string file;
+        RenderMode mode;
+    };
+
+    std::vector<SceneJob> jobs = {
+        {"scene0.crtscene", RenderMode::Barycentric},
+        {"scene1.crtscene", RenderMode::Barycentric},
+        {"scene2.crtscene", RenderMode::Shaded},
+        {"scene3.crtscene", RenderMode::Shaded},
+        {"scene4.crtscene", RenderMode::Shaded},
+        {"scene5.crtscene", RenderMode::Shaded},
+    };
+
+    for (const SceneJob& job : jobs) {
+        std::string inputPath = scenesDir + "/" + job.file;
+        SceneData scene = loadScene(inputPath);
+
+        std::string outName = job.file.substr(0, job.file.find(".crtscene")) + ".ppm";
+        std::string outputPath = outDir + "/" + outName;
+
+        std::cout << job.file << ": " << scene.triangles.size() << " triangles, "
+                  << scene.materials.size() << " materials, "
+                  << scene.imageWidth << "x" << scene.imageHeight
+                  << (job.mode == RenderMode::Barycentric ? " [barycentric]" : " [shaded]") << "\n";
+
+        renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
+                    scene.backgroundColor, outputPath, scene.lights, scene.materials, job.mode);
+        std::cout << "  -> " << outputPath << "\n";
+    }
+    std::cout << "HW09 - Shading 01: done\n";
 }
 
 void printUsage() {
@@ -114,7 +172,8 @@ void printUsage() {
               << "  ChaosRayTracer triangle\n"
               << "  ChaosRayTracer intersect\n"
               << "  ChaosRayTracer camera-demo\n"
-              << "  ChaosRayTracer scene <input.crtscene> <output.ppm>\n";
+              << "  ChaosRayTracer scene <input.crtscene> <output.ppm>\n"
+              << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n";
 }
 
 int main(int argc, char** argv) {
@@ -139,6 +198,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         runSceneFile(argv[2], argv[3]);
+    } else if (command == "hw09") {
+        if (argc < 4) {
+            std::cout << "hw09 command requires <scenes_dir> <output_dir>\n";
+            return 1;
+        }
+        runHw09(argv[2], argv[3]);
     } else {
         printUsage();
         return 1;
