@@ -74,9 +74,6 @@ void runClosestHit(int width, int height) {
     scene.push_back(CRTTriangle(apex, base3, base1, 2));
     scene.push_back(CRTTriangle(base1, base3, base2, 3));
 
-    // This legacy demo predates the materials system and just showed flat face
-    // colors with no lighting. Diffuse shading needs at least one light to be
-    // visible at all, so we add a simple point light here to keep the same look.
     std::vector<Light> lights = { Light(CRTVector(0.0f, 2.0f, 0.0f), 50.0f) };
 
     Camera camera;
@@ -126,27 +123,14 @@ void runSceneFile(const std::string& inputPath, const std::string& outputPath) {
     std::cout << "Rendered to " << outputPath << "\n";
 }
 
-// HW09 - Shading 01:
-//   Task 1 (scene0, scene1): color pixels by barycentric coordinates of the hit.
-//   Task 2 (scene2, scene3): shade using each object's material (diffuse albedo + smooth shading).
-//   Task 3 (scene4, scene5): same, but materials may be reflective (recursive mirror bounces).
-// All three tasks share the same renderScene() pipeline; only Task 1 needs the special
-// Barycentric debug mode since it explicitly ignores materials/lighting.
-void runHw09(const std::string& scenesDir, const std::string& outDir) {
-    struct SceneJob {
-        std::string file;
-        RenderMode mode;
-    };
+struct SceneJob {
+    std::string file;
+    RenderMode mode;
+};
 
-    std::vector<SceneJob> jobs = {
-        {"scene0.crtscene", RenderMode::Barycentric},
-        {"scene1.crtscene", RenderMode::Barycentric},
-        {"scene2.crtscene", RenderMode::Shaded},
-        {"scene3.crtscene", RenderMode::Shaded},
-        {"scene4.crtscene", RenderMode::Shaded},
-        {"scene5.crtscene", RenderMode::Shaded},
-    };
-
+// Renders every scene in a directory and writes a same-named .ppm for each.
+void runSceneBatch(const std::string& scenesDir, const std::string& outDir,
+                    const std::vector<SceneJob>& jobs, const std::string& label) {
     for (const SceneJob& job : jobs) {
         std::string inputPath = scenesDir + "/" + job.file;
         SceneData scene = loadScene(inputPath);
@@ -163,7 +147,36 @@ void runHw09(const std::string& scenesDir, const std::string& outDir) {
                     scene.backgroundColor, outputPath, scene.lights, scene.materials, job.mode);
         std::cout << "  -> " << outputPath << "\n";
     }
-    std::cout << "HW09 - Shading 01: done\n";
+    std::cout << label << ": done\n";
+}
+
+// HW09: scene0/1 = barycentric debug view, scene2-5 = shaded (materials + lighting)
+void runHw09(const std::string& scenesDir, const std::string& outDir) {
+    std::vector<SceneJob> jobs = {
+        {"scene0.crtscene", RenderMode::Barycentric},
+        {"scene1.crtscene", RenderMode::Barycentric},
+        {"scene2.crtscene", RenderMode::Shaded},
+        {"scene3.crtscene", RenderMode::Shaded},
+        {"scene4.crtscene", RenderMode::Shaded},
+        {"scene5.crtscene", RenderMode::Shaded},
+    };
+    runSceneBatch(scenesDir, outDir, jobs, "HW09 - Shading 01");
+}
+
+// HW11: refractive materials, handled inside Renderer.h's shadeHit()
+void runHw11(const std::string& scenesDir, const std::string& outDir) {
+    std::vector<SceneJob> jobs = {
+        {"scene0.crtscene", RenderMode::Shaded},
+        {"scene1.crtscene", RenderMode::Shaded},
+        {"scene2.crtscene", RenderMode::Shaded},
+        {"scene3.crtscene", RenderMode::Shaded},
+        {"scene4.crtscene", RenderMode::Shaded},
+        {"scene5.crtscene", RenderMode::Shaded},
+        {"scene6.crtscene", RenderMode::Shaded},
+        {"scene7.crtscene", RenderMode::Shaded},
+        {"scene8.crtscene", RenderMode::Shaded},
+    };
+    runSceneBatch(scenesDir, outDir, jobs, "HW11 - Shading 03");
 }
 
 void printUsage() {
@@ -173,7 +186,8 @@ void printUsage() {
               << "  ChaosRayTracer intersect\n"
               << "  ChaosRayTracer camera-demo\n"
               << "  ChaosRayTracer scene <input.crtscene> <output.ppm>\n"
-              << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n";
+              << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n"
+              << "  ChaosRayTracer hw11 <scenes_dir> <output_dir>\n";
 }
 
 int main(int argc, char** argv) {
@@ -204,6 +218,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         runHw09(argv[2], argv[3]);
+    } else if (command == "hw11") {
+        if (argc < 4) {
+            std::cout << "hw11 command requires <scenes_dir> <output_dir>\n";
+            return 1;
+        }
+        runHw11(argv[2], argv[3]);
     } else {
         printUsage();
         return 1;

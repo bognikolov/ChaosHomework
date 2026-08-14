@@ -17,9 +17,7 @@ struct CRTMatrix3x3 {
     }
 
 private:
-    // Tag type used to construct a matrix without paying for the identity-fill
-    // work in the default constructor, for call sites that immediately
-    // overwrite all 9 elements anyway (e.g. the rotationX/Y/Z factories below).
+    // used internally to skip the identity-fill when we're about to overwrite everything anyway
     struct Uninitialized {};
     explicit CRTMatrix3x3(Uninitialized) {}
 

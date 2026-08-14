@@ -24,40 +24,9 @@ struct SceneData {
     std::vector<Material> materials;
 };
 
-// Kept for older homeworks (HW05/HW06 demo scenes built without a materials array).
-inline CRTColor triangleColorFromIndex(size_t index) {
-    static const CRTColor palette[] = {
-        CRTColor(220, 60, 60),
-        CRTColor(60, 220, 60),
-        CRTColor(60, 60, 220),
-        CRTColor(220, 220, 60),
-        CRTColor(220, 60, 220),
-        CRTColor(60, 220, 220)
-    };
-    return palette[index % 6];
-}
-
-inline CRTVector albedoFromIndex(size_t index) {
-    static const CRTVector palette[] = {
-        CRTVector(0.9f, 0.2f, 0.2f),
-        CRTVector(0.2f, 0.9f, 0.2f),
-        CRTVector(0.2f, 0.2f, 0.9f),
-        CRTVector(0.9f, 0.9f, 0.2f),
-        CRTVector(0.9f, 0.2f, 0.9f),
-        CRTVector(0.2f, 0.9f, 0.9f),
-        CRTVector(0.85f, 0.85f, 0.85f)
-    };
-    return palette[index % 7];
-}
-
-// For triangles whose material has smooth_shading = true, computes per-vertex
-// normals by averaging the (area-weighted, via the un-normalized cross product)
-// face normals of every triangle sharing that vertex position, then assigns the
-// result back onto each triangle's n0/n1/n2. Triangles with flat materials are
-// left with their default (flat) vertex normals.
+// For triangles with smooth_shading = true, averages face normals around each
+// shared vertex to get smooth per-vertex normals. Flat materials are left alone.
 inline void computeSmoothNormals(std::vector<CRTTriangle>& triangles, const std::vector<Material>& materials) {
-    // Group identical vertex positions together so shared vertices accumulate
-    // contributions from every adjacent triangle, even across different objects.
     struct VecHash {
         size_t operator()(const CRTVector& v) const {
             auto h1 = std::hash<float>{}(v.x);
@@ -81,8 +50,6 @@ inline void computeSmoothNormals(std::vector<CRTTriangle>& triangles, const std:
         if (!smooth) {
             continue;
         }
-        // Un-normalized face normal so its magnitude (proportional to area)
-        // naturally weights bigger triangles more heavily in the average.
         CRTVector faceNormal = cross(tri.v1 - tri.v0, tri.v2 - tri.v0);
         accumulatedNormals[tri.v0] += faceNormal;
         accumulatedNormals[tri.v1] += faceNormal;
@@ -149,9 +116,7 @@ inline SceneData loadScene(const std::string& path) {
 
         if (camera.HasMember("matrix")) {
             const auto& mat = camera["matrix"];
-            // The .crtscene format serializes the rotation matrix column-major:
-            // mat[i*3+j] is column i, row j. We store CRTMatrix3x3::m[row][col],
-            // so we transpose while reading (m[j][i] = mat[i*3+j]).
+            // matrix is stored column-major, so transpose while reading
             for (int col = 0; col < 3; ++col) {
                 for (int row = 0; row < 3; ++row) {
                     scene.camera.rotation.m[row][col] = mat[col * 3 + row].GetFloat();
@@ -190,6 +155,9 @@ inline SceneData loadScene(const std::string& path) {
             }
             if (mat.HasMember("smooth_shading")) {
                 material.smoothShading = mat["smooth_shading"].GetBool();
+            }
+            if (mat.HasMember("ior")) {
+                material.ior = mat["ior"].GetFloat();
             }
 
             scene.materials.push_back(material);

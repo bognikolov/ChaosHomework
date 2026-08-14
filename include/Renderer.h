@@ -11,11 +11,14 @@
 #include "CRTMatrix.h"
 #include "Material.h"
 
-// Small bias used to nudge secondary ray origins off the surface they were
-// spawned from, avoiding self-intersection ("shadow acne" / reflection acne)
-// due to floating point error.
-static const float RAY_BIAS = 1e-3f;
-static const int MAX_REFLECTION_DEPTH = 5;
+// Bias so a bounced ray doesn't self-intersect the surface it just left.
+// Reflection/refraction need more headroom than shadow rays since they
+// often travel near thin geometry.
+static const float SHADOW_BIAS = 0.01f;
+static const float REFLECTION_BIAS = 0.1f;
+static const float REFRACTION_BIAS = 0.1f;
+static const int MAX_TRACE_DEPTH = 5;
+static const float AIR_IOR = 1.0f;
 
 struct SceneHit {
     const CRTTriangle* triangle = nullptr;
@@ -23,10 +26,18 @@ struct SceneHit {
     float u = 0.0f, v = 0.0f, w = 0.0f;
 };
 
-// Finds the closest triangle hit by the ray, if any.
-inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& triangles) {
+// Shadow rays skip refractive triangles - we don't bend shadow rays through
+// glass, so treating it as a solid occluder would just cast a wrong black
+// shadow instead of the dimmed/bent light that should get through.
+inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& triangles,
+                                const std::vector<Material>& materials) {
     SceneHit closest;
     for (const CRTTriangle& tri : triangles) {
+        if (ray.type == RayType::Shadow &&
+            tri.materialIndex >= 0 && static_cast<size_t>(tri.materialIndex) < materials.size() &&
+            materials[tri.materialIndex].type == MaterialType::Refractive) {
+            continue;
+        }
         HitInfo hit;
         if (intersectTriangle(ray, tri, hit)) {
             if (hit.t < closest.t) {
@@ -41,16 +52,18 @@ inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& t
     return closest;
 }
 
-// Checks if `point` is occluded from `light` along the given (already normalized)
-// direction and distance. Caller computes lightDir/dist once and shares them with
-// the shading pass, avoiding a redundant length()/normalize() per light per hit.
 inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
                         const CRTVector& lightDir, float distToLight,
-                        const std::vector<CRTTriangle>& triangles) {
-    CRTVector shadowOrigin = point + normal * RAY_BIAS;
-    Ray shadowRay(shadowOrigin, lightDir);
+                        const std::vector<CRTTriangle>& triangles,
+                        const std::vector<Material>& materials) {
+    CRTVector shadowOrigin = point + normal * SHADOW_BIAS;
+    Ray shadowRay(shadowOrigin, lightDir, AIR_IOR, RayType::Shadow);
 
     for (const CRTTriangle& tri : triangles) {
+        if (tri.materialIndex >= 0 && static_cast<size_t>(tri.materialIndex) < materials.size() &&
+            materials[tri.materialIndex].type == MaterialType::Refractive) {
+            continue;
+        }
         HitInfo hit;
         if (intersectTriangle(shadowRay, tri, hit)) {
             if (hit.t < distToLight) {
@@ -61,20 +74,20 @@ inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
     return false;
 }
 
-// Lambertian (diffuse) direct lighting contribution from all lights, in linear [0,1]-ish space.
 inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, const CRTVector& albedo,
-                               const std::vector<Light>& lights, const std::vector<CRTTriangle>& triangles) {
+                               const std::vector<Light>& lights, const std::vector<CRTTriangle>& triangles,
+                               const std::vector<Material>& materials) {
     CRTVector result(0.0f, 0.0f, 0.0f);
 
     for (const Light& light : lights) {
         CRTVector toLight = light.position - point;
         float dist = toLight.length();
         if (dist < 1e-8f) {
-            continue; // Degenerate: light sits on the shading point, no well-defined direction.
+            continue;
         }
         CRTVector lightDir = toLight * (1.0f / dist);
 
-        if (isInShadow(point, normal, lightDir, dist, triangles)) {
+        if (isInShadow(point, normal, lightDir, dist, triangles, materials)) {
             continue;
         }
 
@@ -84,11 +97,15 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
         result += albedo * (attenuation * cosLaw);
     }
 
+    // clamp so a very bright/close light doesn't blow past 1.0 and then
+    // get amplified further by reflection/refraction bounces above this
+    result.x = std::min(result.x, 1.0f);
+    result.y = std::min(result.y, 1.0f);
+    result.z = std::min(result.z, 1.0f);
+
     return result;
 }
 
-// Forward declaration: traceRay and shadeHit are mutually recursive because
-// reflective materials need to trace a new ray and shade whatever it hits.
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
                            const CRTVector& backgroundColor, int depth);
@@ -103,37 +120,64 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
             : Material{};
 
     CRTVector hitPoint = ray.origin + ray.direction * hitResult.t;
-    CRTVector normal = material.smoothShading
+    CRTVector geometricNormal = material.smoothShading
         ? tri.smoothNormalAt(hitResult.u, hitResult.v, hitResult.w)
         : tri.normal;
 
-    // Keep the shading normal on the same side as the incoming ray so both
-    // diffuse lighting and reflections behave correctly if we ever hit a
-    // back face (e.g. rays bouncing inside a closed mesh).
-    if (dot(normal, ray.direction) > 0.0f) {
-        normal = -normal;
+    bool entering = dot(ray.direction, geometricNormal) < 0.0f;
+    CRTVector normal = entering ? geometricNormal : -geometricNormal;
+
+    if (material.type == MaterialType::Constant) {
+        return material.albedo;
     }
 
     if (material.type == MaterialType::Reflective) {
-        if (depth >= MAX_REFLECTION_DEPTH) {
-            return CRTVector(0.0f, 0.0f, 0.0f);
-        }
         CRTVector reflectedDir = reflect(ray.direction, normal).normalize();
-        CRTVector reflectedOrigin = hitPoint + normal * RAY_BIAS;
-        Ray reflectedRay(reflectedOrigin, reflectedDir);
+        CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
+        Ray reflectedRay(reflectedOrigin, reflectedDir, ray.ior, RayType::Reflection);
         CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, backgroundColor, depth + 1);
-        // Tint the reflection by the material's albedo (acts as the mirror's reflectivity/tint).
         return reflectedColor * material.albedo;
     }
 
-    // Diffuse (default) material.
-    return shadeDiffuse(hitPoint, normal, material.albedo, lights, triangles);
+    if (material.type == MaterialType::Refractive) {
+        float iorFrom = ray.ior;
+        float iorTo = entering ? material.ior : AIR_IOR;
+        float eta = iorFrom / iorTo;
+
+        CRTVector incomingDir = ray.direction.normalize();
+        float cosThetaI = std::max(0.0f, -dot(incomingDir, normal));
+
+        CRTVector refractedDir;
+        bool canRefract = refract(incomingDir, normal, eta, refractedDir);
+
+        float reflectance = canRefract ? fresnelSchlick(cosThetaI, iorFrom, iorTo) : 1.0f;
+
+        CRTVector reflectedDir = reflect(incomingDir, normal).normalize();
+        CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
+        Ray reflectedRay(reflectedOrigin, reflectedDir, iorFrom, RayType::Reflection);
+        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, backgroundColor, depth + 1);
+
+        if (!canRefract) {
+            return reflectedColor;
+        }
+
+        CRTVector refractedOrigin = hitPoint - normal * REFRACTION_BIAS;
+        Ray refractedRay(refractedOrigin, refractedDir.normalize(), iorTo, RayType::Refraction);
+        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, backgroundColor, depth + 1);
+
+        return reflectedColor * reflectance + refractedColor * (1.0f - reflectance);
+    }
+
+    return shadeDiffuse(hitPoint, normal, material.albedo, lights, triangles, materials);
 }
 
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
                            const CRTVector& backgroundColor, int depth) {
-    SceneHit hitResult = intersectScene(ray, triangles);
+    if (depth >= MAX_TRACE_DEPTH) {
+        return backgroundColor;
+    }
+    SceneHit hitResult = intersectScene(ray, triangles, materials);
     if (!hitResult.triangle) {
         return backgroundColor;
     }
@@ -141,9 +185,7 @@ inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triang
 }
 
 enum class RenderMode {
-    // Full shading: diffuse lighting + shadows + reflections, driven by materials.
     Shaded,
-    // Debug mode for HW09 Task 1: color = barycentric weights (u,v,w) as RGB, ignoring materials/lights.
     Barycentric
 };
 
@@ -168,7 +210,7 @@ inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& tr
             CRTColor pixelColor;
 
             if (mode == RenderMode::Barycentric) {
-                SceneHit hitResult = intersectScene(ray, triangles);
+                SceneHit hitResult = intersectScene(ray, triangles, materials);
                 if (!hitResult.triangle) {
                     pixelColor = backgroundColor;
                 } else {

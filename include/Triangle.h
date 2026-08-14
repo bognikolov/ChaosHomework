@@ -1,27 +1,38 @@
 #pragma once
 #include "CRTVector.h"
 
+enum class RayType {
+    Camera,
+    Shadow,
+    Reflection,
+    Refraction
+};
+
 struct Ray {
     CRTVector origin;
     CRTVector direction;
+    // Medium the ray is currently traveling through, carried across bounces
+    // so refraction knows which side of a boundary it's on.
+    float ior = 1.0f;
+    RayType type = RayType::Camera;
+
     Ray(const CRTVector& origin, const CRTVector& direction)
         : origin(origin), direction(direction) {}
+    Ray(const CRTVector& origin, const CRTVector& direction, float ior, RayType type)
+        : origin(origin), direction(direction), ior(ior), type(type) {}
 };
 
-// Result of a ray-triangle intersection, including barycentric coordinates
-// so callers can interpolate normals, colors, UVs, etc.
 struct HitInfo {
     float t = 0.0f;
-    // Barycentric weights w.r.t. (v0, v1, v2). u+v+w == 1.
+    // Barycentric weights w.r.t. (v0, v1, v2).
     float u = 0.0f, v = 0.0f, w = 0.0f;
 };
 
 struct CRTTriangle {
     CRTVector v0, v1, v2;
-    // Flat (geometric) face normal - always available, used when smooth shading is off.
+    // Flat face normal, used unless the material wants smooth shading.
     CRTVector normal;
-    // Optional per-vertex normals - used for smooth (Phong) shading when the
-    // triangle's material has smooth_shading = true. Populated by the scene loader.
+    // Per-vertex normals for smooth shading, filled in by the scene loader.
     CRTVector n0, n1, n2;
     int materialIndex = 0;
 
@@ -30,7 +41,6 @@ struct CRTTriangle {
         CRTVector e0 = v1 - v0;
         CRTVector e1 = v2 - v0;
         normal = cross(e0, e1).normalize();
-        // Default vertex normals to the flat normal until a smooth loader overrides them.
         n0 = n1 = n2 = normal;
     }
 
@@ -40,11 +50,13 @@ struct CRTTriangle {
         return cross(e0, e1).length() * 0.5f;
     }
 
-    // Interpolated normal at the given barycentric weights, using vertex normals.
     CRTVector smoothNormalAt(float u, float v, float w) const {
         return (n0 * u + n1 * v + n2 * w).normalize();
     }
 };
+
+// Min distance so a bounced ray doesn't immediately re-hit the surface it just left.
+static const float T_MIN = 0.001f;
 
 inline bool intersectTriangle(const Ray& ray, const CRTTriangle& tri, HitInfo& hit) {
     float rProj = dot(tri.normal, ray.direction);
@@ -54,7 +66,7 @@ inline bool intersectTriangle(const Ray& ray, const CRTTriangle& tri, HitInfo& h
 
     float rpDist = dot(tri.normal, tri.v0 - ray.origin);
     float t = rpDist / rProj;
-    if (t < 0.0f) {
+    if (t < T_MIN) {
         return false;
     }
 
@@ -79,9 +91,8 @@ inline bool intersectTriangle(const Ray& ray, const CRTTriangle& tri, HitInfo& h
         return false;
     }
 
-    // Barycentric weights: d1/area correspond to vertex v0's opposite sub-triangle, etc.
-    // With e0=(v1-v0), e1=(v2-v1), e2=(v0-v2), the sub-triangle areas (d1, d2, d0)
-    // are proportional to the barycentric weights of (v0, v1, v2) respectively.
+    // d1/d2/d0 are the sub-triangle areas opposite v0/v1/v2, so dividing by
+    // the total gives the barycentric weights.
     float areaTotal = d0 + d1 + d2;
     if (std::fabs(areaTotal) < 1e-12f) {
         return false;
@@ -89,18 +100,8 @@ inline bool intersectTriangle(const Ray& ray, const CRTTriangle& tri, HitInfo& h
     float invAreaTotal = 1.0f / areaTotal;
 
     hit.t = t;
-    hit.u = d1 * invAreaTotal; // weight for v0
-    hit.v = d2 * invAreaTotal; // weight for v1
-    hit.w = d0 * invAreaTotal; // weight for v2
-    return true;
-}
-
-// Backward-compatible overload returning just the distance along the ray.
-inline bool intersectTriangle(const Ray& ray, const CRTTriangle& tri, float& tOut) {
-    HitInfo hit;
-    if (!intersectTriangle(ray, tri, hit)) {
-        return false;
-    }
-    tOut = hit.t;
+    hit.u = d1 * invAreaTotal;
+    hit.v = d2 * invAreaTotal;
+    hit.w = d0 * invAreaTotal;
     return true;
 }
