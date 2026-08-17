@@ -4,6 +4,8 @@
 #include <limits>
 #include <string>
 #include <algorithm>
+#include <thread>
+#include <atomic>
 #include "Camera.h"
 #include "Triangle.h"
 #include "CRTColor.h"
@@ -11,6 +13,7 @@
 #include "CRTMatrix.h"
 #include "Material.h"
 #include "Texture.h"
+#include "AABB.h"
 
 // Bias so a bounced ray doesn't self-intersect the surface it just left.
 // Reflection/refraction need more headroom than shadow rays since they
@@ -31,8 +34,11 @@ struct SceneHit {
 // glass, so treating it as a solid occluder would just cast a wrong black
 // shadow instead of the dimmed/bent light that should get through.
 inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& triangles,
-                                const std::vector<Material>& materials) {
+                                const std::vector<Material>& materials, const AABB& sceneBounds) {
     SceneHit closest;
+    if (!sceneBounds.intersect(ray)) {
+        return closest;
+    }
     for (const CRTTriangle& tri : triangles) {
         if (ray.type == RayType::Shadow &&
             tri.materialIndex >= 0 && static_cast<size_t>(tri.materialIndex) < materials.size() &&
@@ -56,9 +62,13 @@ inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& t
 inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
                         const CRTVector& lightDir, float distToLight,
                         const std::vector<CRTTriangle>& triangles,
-                        const std::vector<Material>& materials) {
+                        const std::vector<Material>& materials, const AABB& sceneBounds) {
     CRTVector shadowOrigin = point + normal * SHADOW_BIAS;
     Ray shadowRay(shadowOrigin, lightDir, AIR_IOR, RayType::Shadow);
+
+    if (!sceneBounds.intersect(shadowRay)) {
+        return false;
+    }
 
     for (const CRTTriangle& tri : triangles) {
         if (tri.materialIndex >= 0 && static_cast<size_t>(tri.materialIndex) < materials.size() &&
@@ -87,7 +97,7 @@ inline CRTVector resolveAlbedo(const Material& material, const std::vector<Textu
 
 inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, const CRTVector& albedo,
                                const std::vector<Light>& lights, const std::vector<CRTTriangle>& triangles,
-                               const std::vector<Material>& materials) {
+                               const std::vector<Material>& materials, const AABB& sceneBounds) {
     CRTVector result(0.0f, 0.0f, 0.0f);
 
     for (const Light& light : lights) {
@@ -98,7 +108,7 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
         }
         CRTVector lightDir = toLight * (1.0f / dist);
 
-        if (isInShadow(point, normal, lightDir, dist, triangles, materials)) {
+        if (isInShadow(point, normal, lightDir, dist, triangles, materials, sceneBounds)) {
             continue;
         }
 
@@ -119,12 +129,12 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
 
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures,
+                           const std::vector<Texture>& textures, const AABB& sceneBounds,
                            const CRTVector& backgroundColor, int depth);
 
 inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures,
+                           const std::vector<Texture>& textures, const AABB& sceneBounds,
                            const CRTVector& backgroundColor, int depth) {
     const CRTTriangle& tri = *hitResult.triangle;
     const Material& material =
@@ -148,7 +158,7 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
         CRTVector reflectedDir = reflect(ray.direction, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, ray.ior, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
+        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
         return reflectedColor * resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
     }
 
@@ -168,7 +178,7 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
         CRTVector reflectedDir = reflect(incomingDir, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, iorFrom, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
+        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
 
         if (!canRefract) {
             return reflectedColor;
@@ -176,27 +186,27 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
 
         CRTVector refractedOrigin = hitPoint - normal * REFRACTION_BIAS;
         Ray refractedRay(refractedOrigin, refractedDir.normalize(), iorTo, RayType::Refraction);
-        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
+        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
 
         return reflectedColor * reflectance + refractedColor * (1.0f - reflectance);
     }
 
     CRTVector albedo = resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
-    return shadeDiffuse(hitPoint, normal, albedo, lights, triangles, materials);
+    return shadeDiffuse(hitPoint, normal, albedo, lights, triangles, materials, sceneBounds);
 }
 
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures,
+                           const std::vector<Texture>& textures, const AABB& sceneBounds,
                            const CRTVector& backgroundColor, int depth) {
     if (depth >= MAX_TRACE_DEPTH) {
         return backgroundColor;
     }
-    SceneHit hitResult = intersectScene(ray, triangles, materials);
+    SceneHit hitResult = intersectScene(ray, triangles, materials, sceneBounds);
     if (!hitResult.triangle) {
         return backgroundColor;
     }
-    return shadeHit(ray, hitResult, triangles, lights, materials, textures, backgroundColor, depth);
+    return shadeHit(ray, hitResult, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth);
 }
 
 enum class RenderMode {
@@ -208,39 +218,116 @@ inline void writePpmHeader(std::ofstream& out, int width, int height) {
     out << "P3\n" << width << " " << height << "\n255\n";
 }
 
+inline AABB computeSceneBounds(const std::vector<CRTTriangle>& triangles) {
+    AABB bounds;
+    for (const CRTTriangle& tri : triangles) {
+        bounds.expand(tri);
+    }
+    return bounds;
+}
+
+struct Bucket {
+    int xStart, yStart, xEnd, yEnd;
+};
+
+inline std::vector<Bucket> makeBuckets(int width, int height, int bucketSize) {
+    std::vector<Bucket> buckets;
+    for (int y = 0; y < height; y += bucketSize) {
+        for (int x = 0; x < width; x += bucketSize) {
+            Bucket b;
+            b.xStart = x;
+            b.yStart = y;
+            b.xEnd = std::min(x + bucketSize, width);
+            b.yEnd = std::min(y + bucketSize, height);
+            buckets.push_back(b);
+        }
+    }
+    return buckets;
+}
+
+inline CRTColor shadePixel(const Camera& camera, int colIdx, int rowIdx, int width, int height,
+                            const std::vector<CRTTriangle>& triangles, const std::vector<Light>& lights,
+                            const std::vector<Material>& materials, const std::vector<Texture>& textures,
+                            const AABB& sceneBounds, const CRTColor& backgroundColor,
+                            const CRTVector& bgLinear, RenderMode mode) {
+    Ray ray = camera.generateRay(colIdx, rowIdx, width, height);
+
+    if (mode == RenderMode::Barycentric) {
+        SceneHit hitResult = intersectScene(ray, triangles, materials, sceneBounds);
+        if (!hitResult.triangle) {
+            return backgroundColor;
+        }
+        return CRTColor::fromLinear(CRTVector(hitResult.u, hitResult.v, hitResult.w));
+    }
+
+    CRTVector linearColor = traceRay(ray, triangles, lights, materials, textures, sceneBounds, bgLinear, 0);
+    return CRTColor::fromLinear(linearColor);
+}
+
 inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& triangles,
                          int width, int height, const CRTColor& backgroundColor,
                          const std::string& outputPath, const std::vector<Light>& lights = {},
                          const std::vector<Material>& materials = {},
                          const std::vector<Texture>& textures = {},
-                         RenderMode mode = RenderMode::Shaded) {
-    std::ofstream ppmFileStream(outputPath, std::ios::out | std::ios::binary);
-    writePpmHeader(ppmFileStream, width, height);
-
+                         RenderMode mode = RenderMode::Shaded,
+                         int bucketSize = 32,
+                         bool useAABB = true,
+                         int threadCount = 0) {
+    AABB sceneBounds = useAABB ? computeSceneBounds(triangles) : AABB{};
+    if (!useAABB) {
+        // Wide-open bounds so the AABB.intersect() check never rejects a ray.
+        sceneBounds.min = CRTVector(-1e9f, -1e9f, -1e9f);
+        sceneBounds.max = CRTVector(1e9f, 1e9f, 1e9f);
+    }
     CRTVector bgLinear(backgroundColor.r / 255.0f, backgroundColor.g / 255.0f, backgroundColor.b / 255.0f);
 
+    std::vector<CRTColor> pixels(static_cast<size_t>(width) * height);
+
+    std::vector<Bucket> buckets = makeBuckets(width, height, bucketSize);
+    std::atomic<size_t> nextBucket(0);
+
+    unsigned int numThreads;
+    if (threadCount > 0) {
+        numThreads = static_cast<unsigned int>(threadCount);
+    } else {
+        numThreads = std::thread::hardware_concurrency();
+        if (numThreads == 0) {
+            numThreads = 4;
+        }
+    }
+    numThreads = std::min<unsigned int>(numThreads, static_cast<unsigned int>(std::max<size_t>(1, buckets.size())));
+
+    auto worker = [&]() {
+        size_t bucketIdx;
+        while ((bucketIdx = nextBucket.fetch_add(1)) < buckets.size()) {
+            const Bucket& bucket = buckets[bucketIdx];
+            for (int rowIdx = bucket.yStart; rowIdx < bucket.yEnd; ++rowIdx) {
+                for (int colIdx = bucket.xStart; colIdx < bucket.xEnd; ++colIdx) {
+                    CRTColor pixelColor = shadePixel(camera, colIdx, rowIdx, width, height,
+                                                      triangles, lights, materials, textures,
+                                                      sceneBounds, backgroundColor, bgLinear, mode);
+                    pixels[static_cast<size_t>(rowIdx) * width + colIdx] = pixelColor;
+                }
+            }
+        }
+    };
+
+    std::vector<std::thread> workers;
+    for (unsigned int i = 0; i < numThreads; ++i) {
+        workers.emplace_back(worker);
+    }
+    for (std::thread& t : workers) {
+        t.join();
+    }
+
+    std::ofstream ppmFileStream(outputPath, std::ios::out | std::ios::binary);
+    writePpmHeader(ppmFileStream, width, height);
     for (int rowIdx = 0; rowIdx < height; ++rowIdx) {
         for (int colIdx = 0; colIdx < width; ++colIdx) {
-            Ray ray = camera.generateRay(colIdx, rowIdx, width, height);
-
-            CRTColor pixelColor;
-
-            if (mode == RenderMode::Barycentric) {
-                SceneHit hitResult = intersectScene(ray, triangles, materials);
-                if (!hitResult.triangle) {
-                    pixelColor = backgroundColor;
-                } else {
-                    pixelColor = CRTColor::fromLinear(CRTVector(hitResult.u, hitResult.v, hitResult.w));
-                }
-            } else {
-                CRTVector linearColor = traceRay(ray, triangles, lights, materials, textures, bgLinear, 0);
-                pixelColor = CRTColor::fromLinear(linearColor);
-            }
-
+            const CRTColor& pixelColor = pixels[static_cast<size_t>(rowIdx) * width + colIdx];
             ppmFileStream << pixelColor.r << " " << pixelColor.g << " " << pixelColor.b << "\t";
         }
         ppmFileStream << "\n";
     }
-
     ppmFileStream.close();
 }

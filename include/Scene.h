@@ -21,6 +21,7 @@
 struct SceneData {
     int imageWidth = 1920;
     int imageHeight = 1080;
+    int bucketSize = 32;
     CRTColor backgroundColor;
     Camera camera;
     std::vector<CRTTriangle> triangles;
@@ -106,6 +107,9 @@ inline SceneData loadScene(const std::string& path) {
             const auto& imgSettings = settings["image_settings"];
             scene.imageWidth = imgSettings["width"].GetInt();
             scene.imageHeight = imgSettings["height"].GetInt();
+            if (imgSettings.HasMember("bucket_size")) {
+                scene.bucketSize = imgSettings["bucket_size"].GetInt();
+            }
         }
     }
 

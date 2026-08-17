@@ -31,3 +31,6 @@ target_include_directories(ChaosRayTracer PRIVATE
     ${rapidjson_SOURCE_DIR}/include
     ${stb_SOURCE_DIR}
 )
+
+find_package(Threads REQUIRED)
+target_link_libraries(ChaosRayTracer PRIVATE Threads::Threads)

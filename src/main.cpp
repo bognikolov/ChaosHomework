@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <chrono>
 #include "CRTVector.h"
 #include "CRTMatrix.h"
 #include "Triangle.h"
@@ -119,7 +120,8 @@ void runSceneFile(const std::string& inputPath, const std::string& outputPath) {
               << scene.imageWidth << "x" << scene.imageHeight << "\n";
 
     renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures);
+                scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures,
+                RenderMode::Shaded, scene.bucketSize);
     std::cout << "Rendered to " << outputPath << "\n";
 }
 
@@ -144,7 +146,8 @@ void runSceneBatch(const std::string& scenesDir, const std::string& outDir,
                   << (job.mode == RenderMode::Barycentric ? " [barycentric]" : " [shaded]") << "\n";
 
         renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                    scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures, job.mode);
+                    scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures,
+                    job.mode, scene.bucketSize);
         std::cout << "  -> " << outputPath << "\n";
     }
     std::cout << label << ": done\n";
@@ -191,6 +194,40 @@ void runHw12(const std::string& scenesDir, const std::string& outDir) {
     runSceneBatch(scenesDir, outDir, jobs, "HW12 - Textures");
 }
 
+// HW13: measures render time with each optimization (AABB, threading, bucket
+// size) toggled on/off, so the improvement from each one is visible on its own.
+void runHw13(const std::string& scenePath, const std::string& outDir) {
+    SceneData scene = loadScene(scenePath);
+    std::cout << "Scene: " << scene.triangles.size() << " triangles, "
+              << scene.imageWidth << "x" << scene.imageHeight
+              << ", bucket_size=" << scene.bucketSize << "\n\n";
+
+    auto timedRender = [&](const std::string& label, const std::string& outName,
+                            bool useAABB, int threadCount, int bucketSize) {
+        auto start = std::chrono::steady_clock::now();
+        renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
+                    scene.backgroundColor, outDir + "/" + outName, scene.lights, scene.materials,
+                    scene.textures, RenderMode::Shaded, bucketSize, useAABB, threadCount);
+        auto end = std::chrono::steady_clock::now();
+        double seconds = std::chrono::duration<double>(end - start).count();
+        std::cout << label << ": " << seconds << "s\n";
+    };
+
+    // Baseline: single thread, no AABB, one big bucket (whole image as one region).
+    timedRender("baseline (1 thread, no AABB, single bucket)", "hw13_baseline.ppm",
+                false, 1, std::max(scene.imageWidth, scene.imageHeight));
+
+    // + scene AABB only.
+    timedRender("+ scene AABB", "hw13_aabb.ppm",
+                true, 1, std::max(scene.imageWidth, scene.imageHeight));
+
+    // + multithreaded buckets (using the scene's bucket_size), AABB still on.
+    timedRender("+ multithreaded buckets", "hw13_threaded.ppm",
+                true, 0, scene.bucketSize);
+
+    std::cout << "\nHW13 - Optimizations 01: done\n";
+}
+
 void printUsage() {
     std::cout << "Usage:\n"
               << "  ChaosRayTracer rays\n"
@@ -200,7 +237,8 @@ void printUsage() {
               << "  ChaosRayTracer scene <input.crtscene> <output.ppm>\n"
               << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n"
               << "  ChaosRayTracer hw11 <scenes_dir> <output_dir>\n"
-              << "  ChaosRayTracer hw12 <scenes_dir> <output_dir>\n";
+              << "  ChaosRayTracer hw12 <scenes_dir> <output_dir>\n"
+              << "  ChaosRayTracer hw13 <scene.crtscene> <output_dir>\n";
 }
 
 int main(int argc, char** argv) {
@@ -243,6 +281,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         runHw12(argv[2], argv[3]);
+    } else if (command == "hw13") {
+        if (argc < 4) {
+            std::cout << "hw13 command requires <scene.crtscene> <output_dir>\n";
+            return 1;
+        }
+        runHw13(argv[2], argv[3]);
     } else {
         printUsage();
         return 1;

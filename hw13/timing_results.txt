@@ -1,0 +1,15 @@
+HW13 - Optimizations 01
+Scene: scene0.crtscene, 4014 triangles, 1920x1080, bucket_size=24 (from scene file)
+Test machine: 1 CPU core
+
+baseline (single thread, no AABB, whole image as one bucket): 338.27s
++ scene AABB:                                                  184.30s   (45.5% faster than baseline)
++ multithreaded buckets (bucket_size from scene, all cores):   183.80s   (no further gain: test machine has only 1 core)
+
+All three renders are byte-identical (verified via MD5) - the optimizations
+only change render time, not the output image.
+
+On a multi-core machine, the multithreaded-buckets step is expected to give
+a further ~Nx speedup proportional to core count, since bucket work is
+independent and evenly distributed across threads via a shared atomic
+work-queue index.
