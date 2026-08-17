@@ -13,6 +13,10 @@
 #include "Camera.h"
 #include "Light.h"
 #include "Material.h"
+#include "Texture.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 struct SceneData {
     int imageWidth = 1920;
@@ -22,6 +26,7 @@ struct SceneData {
     std::vector<CRTTriangle> triangles;
     std::vector<Light> lights;
     std::vector<Material> materials;
+    std::vector<Texture> textures;
 };
 
 // For triangles with smooth_shading = true, averages face normals around each
@@ -138,6 +143,80 @@ inline SceneData loadScene(const std::string& path) {
         }
     }
 
+    if (doc.HasMember("textures")) {
+        const auto& textures = doc["textures"];
+        for (rapidjson::SizeType i = 0; i < textures.Size(); ++i) {
+            const auto& tex = textures[i];
+            Texture texture;
+
+            if (tex.HasMember("name")) {
+                texture.name = tex["name"].GetString();
+            }
+            if (tex.HasMember("type")) {
+                texture.type = textureTypeFromString(tex["type"].GetString());
+            }
+
+            if (texture.type == TextureType::Albedo && tex.HasMember("albedo")) {
+                const auto& a = tex["albedo"];
+                texture.albedo = CRTVector(a[0].GetFloat(), a[1].GetFloat(), a[2].GetFloat());
+            }
+
+            if (texture.type == TextureType::Edges) {
+                if (tex.HasMember("edge_color")) {
+                    const auto& c = tex["edge_color"];
+                    texture.edgeColor = CRTVector(c[0].GetFloat(), c[1].GetFloat(), c[2].GetFloat());
+                }
+                if (tex.HasMember("inner_color")) {
+                    const auto& c = tex["inner_color"];
+                    texture.innerColor = CRTVector(c[0].GetFloat(), c[1].GetFloat(), c[2].GetFloat());
+                }
+                if (tex.HasMember("edge_width")) {
+                    texture.edgeWidth = tex["edge_width"].GetFloat();
+                }
+            }
+
+            if (texture.type == TextureType::Checker) {
+                if (tex.HasMember("color_A")) {
+                    const auto& c = tex["color_A"];
+                    texture.colorA = CRTVector(c[0].GetFloat(), c[1].GetFloat(), c[2].GetFloat());
+                }
+                if (tex.HasMember("color_B")) {
+                    const auto& c = tex["color_B"];
+                    texture.colorB = CRTVector(c[0].GetFloat(), c[1].GetFloat(), c[2].GetFloat());
+                }
+                if (tex.HasMember("square_size")) {
+                    texture.squareSize = tex["square_size"].GetFloat();
+                }
+            }
+
+            if (texture.type == TextureType::Bitmap && tex.HasMember("file_path")) {
+                std::string filePath = tex["file_path"].GetString();
+                // file_path in the scene is like "/textures/dragon.jpg"; resolve it
+                // relative to the directory the .crtscene file itself lives in.
+                std::string sceneDir;
+                size_t slashPos = path.find_last_of("/\\");
+                if (slashPos != std::string::npos) {
+                    sceneDir = path.substr(0, slashPos);
+                }
+                std::string resolvedPath = sceneDir + filePath;
+
+                int w, h, ch;
+                unsigned char* data = stbi_load(resolvedPath.c_str(), &w, &h, &ch, 3);
+                if (data) {
+                    texture.width = w;
+                    texture.height = h;
+                    texture.channels = 3;
+                    texture.pixels.assign(data, data + (static_cast<size_t>(w) * h * 3));
+                    stbi_image_free(data);
+                } else {
+                    throw std::runtime_error("Could not load texture image: " + resolvedPath);
+                }
+            }
+
+            scene.textures.push_back(texture);
+        }
+    }
+
     if (doc.HasMember("materials")) {
         const auto& materials = doc["materials"];
         for (rapidjson::SizeType i = 0; i < materials.Size(); ++i) {
@@ -149,9 +228,20 @@ inline SceneData loadScene(const std::string& path) {
             }
             if (mat.HasMember("albedo")) {
                 const auto& albedo = mat["albedo"];
-                material.albedo = CRTVector(
-                    albedo[0].GetFloat(), albedo[1].GetFloat(), albedo[2].GetFloat()
-                );
+                if (albedo.IsString()) {
+                    // Named reference into the scene's texture list.
+                    std::string texName = albedo.GetString();
+                    for (size_t t = 0; t < scene.textures.size(); ++t) {
+                        if (scene.textures[t].name == texName) {
+                            material.textureIndex = static_cast<int>(t);
+                            break;
+                        }
+                    }
+                } else {
+                    material.albedo = CRTVector(
+                        albedo[0].GetFloat(), albedo[1].GetFloat(), albedo[2].GetFloat()
+                    );
+                }
             }
             if (mat.HasMember("smooth_shading")) {
                 material.smoothShading = mat["smooth_shading"].GetBool();
@@ -184,15 +274,31 @@ inline SceneData loadScene(const std::string& path) {
                 ));
             }
 
+            std::vector<CRTVector> uvs;
+            if (obj.HasMember("uvs")) {
+                const auto& uvArray = obj["uvs"];
+                for (rapidjson::SizeType i = 0; i < uvArray.Size(); i += 3) {
+                    uvs.push_back(CRTVector(
+                        uvArray[i].GetFloat(),
+                        uvArray[i + 1].GetFloat(),
+                        uvArray[i + 2].GetFloat()
+                    ));
+                }
+            }
+
             const auto& tris = obj["triangles"];
             for (rapidjson::SizeType i = 0; i < tris.Size(); i += 3) {
                 int i0 = tris[i].GetInt();
                 int i1 = tris[i + 1].GetInt();
                 int i2 = tris[i + 2].GetInt();
 
-                scene.triangles.push_back(
-                    CRTTriangle(vertices[i0], vertices[i1], vertices[i2], materialIndex)
-                );
+                CRTTriangle triangle(vertices[i0], vertices[i1], vertices[i2], materialIndex);
+                if (!uvs.empty()) {
+                    triangle.uv0 = uvs[i0];
+                    triangle.uv1 = uvs[i1];
+                    triangle.uv2 = uvs[i2];
+                }
+                scene.triangles.push_back(triangle);
             }
         }
     }

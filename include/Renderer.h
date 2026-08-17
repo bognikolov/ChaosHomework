@@ -10,6 +10,7 @@
 #include "Light.h"
 #include "CRTMatrix.h"
 #include "Material.h"
+#include "Texture.h"
 
 // Bias so a bounced ray doesn't self-intersect the surface it just left.
 // Reflection/refraction need more headroom than shadow rays since they
@@ -74,6 +75,16 @@ inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
     return false;
 }
 
+inline CRTVector resolveAlbedo(const Material& material, const std::vector<Texture>& textures,
+                                const CRTTriangle& tri, float u, float v, float w) {
+    if (material.textureIndex < 0 || static_cast<size_t>(material.textureIndex) >= textures.size()) {
+        return material.albedo;
+    }
+    float texU, texV;
+    tri.uvAt(u, v, w, texU, texV);
+    return textures[material.textureIndex].sample(u, v, w, texU, texV);
+}
+
 inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, const CRTVector& albedo,
                                const std::vector<Light>& lights, const std::vector<CRTTriangle>& triangles,
                                const std::vector<Material>& materials) {
@@ -108,10 +119,12 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
 
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth);
 
 inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth) {
     const CRTTriangle& tri = *hitResult.triangle;
     const Material& material =
@@ -128,15 +141,15 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
     CRTVector normal = entering ? geometricNormal : -geometricNormal;
 
     if (material.type == MaterialType::Constant) {
-        return material.albedo;
+        return resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
     }
 
     if (material.type == MaterialType::Reflective) {
         CRTVector reflectedDir = reflect(ray.direction, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, ray.ior, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, backgroundColor, depth + 1);
-        return reflectedColor * material.albedo;
+        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
+        return reflectedColor * resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
     }
 
     if (material.type == MaterialType::Refractive) {
@@ -155,7 +168,7 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
         CRTVector reflectedDir = reflect(incomingDir, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, iorFrom, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, backgroundColor, depth + 1);
+        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
 
         if (!canRefract) {
             return reflectedColor;
@@ -163,16 +176,18 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
 
         CRTVector refractedOrigin = hitPoint - normal * REFRACTION_BIAS;
         Ray refractedRay(refractedOrigin, refractedDir.normalize(), iorTo, RayType::Refraction);
-        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, backgroundColor, depth + 1);
+        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, textures, backgroundColor, depth + 1);
 
         return reflectedColor * reflectance + refractedColor * (1.0f - reflectance);
     }
 
-    return shadeDiffuse(hitPoint, normal, material.albedo, lights, triangles, materials);
+    CRTVector albedo = resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
+    return shadeDiffuse(hitPoint, normal, albedo, lights, triangles, materials);
 }
 
 inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth) {
     if (depth >= MAX_TRACE_DEPTH) {
         return backgroundColor;
@@ -181,7 +196,7 @@ inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triang
     if (!hitResult.triangle) {
         return backgroundColor;
     }
-    return shadeHit(ray, hitResult, triangles, lights, materials, backgroundColor, depth);
+    return shadeHit(ray, hitResult, triangles, lights, materials, textures, backgroundColor, depth);
 }
 
 enum class RenderMode {
@@ -197,6 +212,7 @@ inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& tr
                          int width, int height, const CRTColor& backgroundColor,
                          const std::string& outputPath, const std::vector<Light>& lights = {},
                          const std::vector<Material>& materials = {},
+                         const std::vector<Texture>& textures = {},
                          RenderMode mode = RenderMode::Shaded) {
     std::ofstream ppmFileStream(outputPath, std::ios::out | std::ios::binary);
     writePpmHeader(ppmFileStream, width, height);
@@ -217,7 +233,7 @@ inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& tr
                     pixelColor = CRTColor::fromLinear(CRTVector(hitResult.u, hitResult.v, hitResult.w));
                 }
             } else {
-                CRTVector linearColor = traceRay(ray, triangles, lights, materials, bgLinear, 0);
+                CRTVector linearColor = traceRay(ray, triangles, lights, materials, textures, bgLinear, 0);
                 pixelColor = CRTColor::fromLinear(linearColor);
             }
 

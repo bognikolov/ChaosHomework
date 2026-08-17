@@ -34,6 +34,8 @@ struct CRTTriangle {
     CRTVector normal;
     // Per-vertex normals for smooth shading, filled in by the scene loader.
     CRTVector n0, n1, n2;
+    // Per-vertex UVs (u, v, 0), used for checker/bitmap texture sampling.
+    CRTVector uv0, uv1, uv2;
     int materialIndex = 0;
 
     CRTTriangle(const CRTVector& v0, const CRTVector& v1, const CRTVector& v2, int materialIndex = 0)
@@ -52,6 +54,13 @@ struct CRTTriangle {
 
     CRTVector smoothNormalAt(float u, float v, float w) const {
         return (n0 * u + n1 * v + n2 * w).normalize();
+    }
+
+    // Interpolated (u, v) texture coordinate at the given barycentric weights.
+    void uvAt(float u, float v, float w, float& outU, float& outV) const {
+        CRTVector uv = uv0 * u + uv1 * v + uv2 * w;
+        outU = uv.x;
+        outV = uv.y;
     }
 };
 

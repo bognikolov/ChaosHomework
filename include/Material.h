@@ -29,4 +29,7 @@ struct Material {
     // Index of refraction, only meaningful for Refractive materials. Defaults
     // to a common glass-like value when a scene omits it.
     float ior = 1.5f;
+    // Index into the scene's texture list, or -1 if this material's albedo is
+    // just the plain color above (no "albedo": "<texture name>" in the JSON).
+    int textureIndex = -1;
 };

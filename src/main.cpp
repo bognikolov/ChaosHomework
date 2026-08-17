@@ -119,7 +119,7 @@ void runSceneFile(const std::string& inputPath, const std::string& outputPath) {
               << scene.imageWidth << "x" << scene.imageHeight << "\n";
 
     renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                scene.backgroundColor, outputPath, scene.lights, scene.materials);
+                scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures);
     std::cout << "Rendered to " << outputPath << "\n";
 }
 
@@ -144,7 +144,7 @@ void runSceneBatch(const std::string& scenesDir, const std::string& outDir,
                   << (job.mode == RenderMode::Barycentric ? " [barycentric]" : " [shaded]") << "\n";
 
         renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
-                    scene.backgroundColor, outputPath, scene.lights, scene.materials, job.mode);
+                    scene.backgroundColor, outputPath, scene.lights, scene.materials, scene.textures, job.mode);
         std::cout << "  -> " << outputPath << "\n";
     }
     std::cout << label << ": done\n";
@@ -179,6 +179,18 @@ void runHw11(const std::string& scenesDir, const std::string& outDir) {
     runSceneBatch(scenesDir, outDir, jobs, "HW11 - Shading 03");
 }
 
+// HW12: textured materials (albedo/edges/checker/bitmap), sampled in Renderer.h's shadeHit()
+void runHw12(const std::string& scenesDir, const std::string& outDir) {
+    std::vector<SceneJob> jobs = {
+        {"scene0.crtscene", RenderMode::Shaded},
+        {"scene1.crtscene", RenderMode::Shaded},
+        {"scene2.crtscene", RenderMode::Shaded},
+        {"scene3.crtscene", RenderMode::Shaded},
+        {"scene4.crtscene", RenderMode::Shaded},
+    };
+    runSceneBatch(scenesDir, outDir, jobs, "HW12 - Textures");
+}
+
 void printUsage() {
     std::cout << "Usage:\n"
               << "  ChaosRayTracer rays\n"
@@ -187,7 +199,8 @@ void printUsage() {
               << "  ChaosRayTracer camera-demo\n"
               << "  ChaosRayTracer scene <input.crtscene> <output.ppm>\n"
               << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n"
-              << "  ChaosRayTracer hw11 <scenes_dir> <output_dir>\n";
+              << "  ChaosRayTracer hw11 <scenes_dir> <output_dir>\n"
+              << "  ChaosRayTracer hw12 <scenes_dir> <output_dir>\n";
 }
 
 int main(int argc, char** argv) {
@@ -224,6 +237,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         runHw11(argv[2], argv[3]);
+    } else if (command == "hw12") {
+        if (argc < 4) {
+            std::cout << "hw12 command requires <scenes_dir> <output_dir>\n";
+            return 1;
+        }
+        runHw12(argv[2], argv[3]);
     } else {
         printUsage();
         return 1;

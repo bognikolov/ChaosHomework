@@ -17,9 +17,17 @@ set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(RAPIDJSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(rapidjson)
 
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
+)
+FetchContent_MakeAvailable(stb)
+
 add_executable(ChaosRayTracer src/main.cpp)
 
 target_include_directories(ChaosRayTracer PRIVATE
     include
     ${rapidjson_SOURCE_DIR}/include
+    ${stb_SOURCE_DIR}
 )
