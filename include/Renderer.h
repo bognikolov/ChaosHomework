@@ -14,6 +14,7 @@
 #include "Material.h"
 #include "Texture.h"
 #include "AABB.h"
+#include "BVH.h"
 
 // Bias so a bounced ray doesn't self-intersect the surface it just left.
 // Reflection/refraction need more headroom than shadow rays since they
@@ -30,11 +31,21 @@ struct SceneHit {
     float u = 0.0f, v = 0.0f, w = 0.0f;
 };
 
-// Shadow rays skip refractive triangles - we don't bend shadow rays through
-// glass, so treating it as a solid occluder would just cast a wrong black
-// shadow instead of the dimmed/bent light that should get through.
-inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& triangles,
-                                const std::vector<Material>& materials, const AABB& sceneBounds) {
+// Everything the intersection/shading code needs about the scene's geometry,
+// bundled so render functions don't need a dozen separate parameters. Exactly
+// one of useBVH/useAABB actually gets used for broad-phase rejection - having
+// both lets HW14 compare BVH vs the older flat-AABB-only approach.
+struct SceneAccel {
+    const std::vector<CRTTriangle>* triangles = nullptr;
+    const BVH* bvh = nullptr;
+    AABB flatBounds;
+    bool useBVH = true;
+};
+
+// Linear scan fallback (pre-BVH behavior), kept so HW14's timing comparison
+// has a real "before" to measure against.
+inline SceneHit intersectSceneLinear(const Ray& ray, const std::vector<CRTTriangle>& triangles,
+                                      const std::vector<Material>& materials, const AABB& sceneBounds) {
     SceneHit closest;
     if (!sceneBounds.intersect(ray)) {
         return closest;
@@ -59,17 +70,13 @@ inline SceneHit intersectScene(const Ray& ray, const std::vector<CRTTriangle>& t
     return closest;
 }
 
-inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
-                        const CRTVector& lightDir, float distToLight,
-                        const std::vector<CRTTriangle>& triangles,
-                        const std::vector<Material>& materials, const AABB& sceneBounds) {
-    CRTVector shadowOrigin = point + normal * SHADOW_BIAS;
+inline bool isInShadowLinear(const CRTVector& shadowOrigin, const CRTVector& lightDir, float distToLight,
+                              const std::vector<CRTTriangle>& triangles,
+                              const std::vector<Material>& materials, const AABB& sceneBounds) {
     Ray shadowRay(shadowOrigin, lightDir, AIR_IOR, RayType::Shadow);
-
     if (!sceneBounds.intersect(shadowRay)) {
         return false;
     }
-
     for (const CRTTriangle& tri : triangles) {
         if (tri.materialIndex >= 0 && static_cast<size_t>(tri.materialIndex) < materials.size() &&
             materials[tri.materialIndex].type == MaterialType::Refractive) {
@@ -85,6 +92,41 @@ inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
     return false;
 }
 
+// Shadow rays skip refractive triangles - we don't bend shadow rays through
+// glass, so treating it as a solid occluder would just cast a wrong black
+// shadow instead of the dimmed/bent light that should get through.
+inline SceneHit intersectScene(const Ray& ray, const SceneAccel& accel, const std::vector<Material>& materials) {
+    if (accel.useBVH) {
+        SceneHit closest;
+        const CRTTriangle* bestTri = nullptr;
+        HitInfo bestHit;
+        bool skipRefractive = (ray.type == RayType::Shadow);
+        if (accel.bvh->intersect(ray, skipRefractive, materials, closest.t, bestTri, bestHit)) {
+            closest.triangle = bestTri;
+            closest.u = bestHit.u;
+            closest.v = bestHit.v;
+            closest.w = bestHit.w;
+        }
+        return closest;
+    }
+    return intersectSceneLinear(ray, *accel.triangles, materials, accel.flatBounds);
+}
+
+inline bool isInShadow(const CRTVector& point, const CRTVector& normal,
+                        const CRTVector& lightDir, float distToLight,
+                        const SceneAccel& accel, const std::vector<Material>& materials) {
+    CRTVector shadowOrigin = point + normal * SHADOW_BIAS;
+
+    if (accel.useBVH) {
+        Ray shadowRay(shadowOrigin, lightDir, AIR_IOR, RayType::Shadow);
+        float bestT = distToLight;
+        const CRTTriangle* bestTri = nullptr;
+        HitInfo bestHit;
+        return accel.bvh->intersect(shadowRay, true, materials, bestT, bestTri, bestHit);
+    }
+    return isInShadowLinear(shadowOrigin, lightDir, distToLight, *accel.triangles, materials, accel.flatBounds);
+}
+
 inline CRTVector resolveAlbedo(const Material& material, const std::vector<Texture>& textures,
                                 const CRTTriangle& tri, float u, float v, float w) {
     if (material.textureIndex < 0 || static_cast<size_t>(material.textureIndex) >= textures.size()) {
@@ -96,8 +138,8 @@ inline CRTVector resolveAlbedo(const Material& material, const std::vector<Textu
 }
 
 inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, const CRTVector& albedo,
-                               const std::vector<Light>& lights, const std::vector<CRTTriangle>& triangles,
-                               const std::vector<Material>& materials, const AABB& sceneBounds) {
+                               const std::vector<Light>& lights, const SceneAccel& accel,
+                               const std::vector<Material>& materials) {
     CRTVector result(0.0f, 0.0f, 0.0f);
 
     for (const Light& light : lights) {
@@ -108,7 +150,7 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
         }
         CRTVector lightDir = toLight * (1.0f / dist);
 
-        if (isInShadow(point, normal, lightDir, dist, triangles, materials, sceneBounds)) {
+        if (isInShadow(point, normal, lightDir, dist, accel, materials)) {
             continue;
         }
 
@@ -127,14 +169,14 @@ inline CRTVector shadeDiffuse(const CRTVector& point, const CRTVector& normal, c
     return result;
 }
 
-inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
+inline CRTVector traceRay(const Ray& ray, const SceneAccel& accel,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures, const AABB& sceneBounds,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth);
 
-inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::vector<CRTTriangle>& triangles,
+inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const SceneAccel& accel,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures, const AABB& sceneBounds,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth) {
     const CRTTriangle& tri = *hitResult.triangle;
     const Material& material =
@@ -158,7 +200,7 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
         CRTVector reflectedDir = reflect(ray.direction, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, ray.ior, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
+        CRTVector reflectedColor = traceRay(reflectedRay, accel, lights, materials, textures, backgroundColor, depth + 1);
         return reflectedColor * resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
     }
 
@@ -178,7 +220,7 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
         CRTVector reflectedDir = reflect(incomingDir, normal).normalize();
         CRTVector reflectedOrigin = hitPoint + normal * REFLECTION_BIAS;
         Ray reflectedRay(reflectedOrigin, reflectedDir, iorFrom, RayType::Reflection);
-        CRTVector reflectedColor = traceRay(reflectedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
+        CRTVector reflectedColor = traceRay(reflectedRay, accel, lights, materials, textures, backgroundColor, depth + 1);
 
         if (!canRefract) {
             return reflectedColor;
@@ -186,27 +228,27 @@ inline CRTVector shadeHit(const Ray& ray, const SceneHit& hitResult, const std::
 
         CRTVector refractedOrigin = hitPoint - normal * REFRACTION_BIAS;
         Ray refractedRay(refractedOrigin, refractedDir.normalize(), iorTo, RayType::Refraction);
-        CRTVector refractedColor = traceRay(refractedRay, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth + 1);
+        CRTVector refractedColor = traceRay(refractedRay, accel, lights, materials, textures, backgroundColor, depth + 1);
 
         return reflectedColor * reflectance + refractedColor * (1.0f - reflectance);
     }
 
     CRTVector albedo = resolveAlbedo(material, textures, tri, hitResult.u, hitResult.v, hitResult.w);
-    return shadeDiffuse(hitPoint, normal, albedo, lights, triangles, materials, sceneBounds);
+    return shadeDiffuse(hitPoint, normal, albedo, lights, accel, materials);
 }
 
-inline CRTVector traceRay(const Ray& ray, const std::vector<CRTTriangle>& triangles,
+inline CRTVector traceRay(const Ray& ray, const SceneAccel& accel,
                            const std::vector<Light>& lights, const std::vector<Material>& materials,
-                           const std::vector<Texture>& textures, const AABB& sceneBounds,
+                           const std::vector<Texture>& textures,
                            const CRTVector& backgroundColor, int depth) {
     if (depth >= MAX_TRACE_DEPTH) {
         return backgroundColor;
     }
-    SceneHit hitResult = intersectScene(ray, triangles, materials, sceneBounds);
+    SceneHit hitResult = intersectScene(ray, accel, materials);
     if (!hitResult.triangle) {
         return backgroundColor;
     }
-    return shadeHit(ray, hitResult, triangles, lights, materials, textures, sceneBounds, backgroundColor, depth);
+    return shadeHit(ray, hitResult, accel, lights, materials, textures, backgroundColor, depth);
 }
 
 enum class RenderMode {
@@ -246,21 +288,20 @@ inline std::vector<Bucket> makeBuckets(int width, int height, int bucketSize) {
 }
 
 inline CRTColor shadePixel(const Camera& camera, int colIdx, int rowIdx, int width, int height,
-                            const std::vector<CRTTriangle>& triangles, const std::vector<Light>& lights,
+                            const SceneAccel& accel, const std::vector<Light>& lights,
                             const std::vector<Material>& materials, const std::vector<Texture>& textures,
-                            const AABB& sceneBounds, const CRTColor& backgroundColor,
-                            const CRTVector& bgLinear, RenderMode mode) {
+                            const CRTColor& backgroundColor, const CRTVector& bgLinear, RenderMode mode) {
     Ray ray = camera.generateRay(colIdx, rowIdx, width, height);
 
     if (mode == RenderMode::Barycentric) {
-        SceneHit hitResult = intersectScene(ray, triangles, materials, sceneBounds);
+        SceneHit hitResult = intersectScene(ray, accel, materials);
         if (!hitResult.triangle) {
             return backgroundColor;
         }
         return CRTColor::fromLinear(CRTVector(hitResult.u, hitResult.v, hitResult.w));
     }
 
-    CRTVector linearColor = traceRay(ray, triangles, lights, materials, textures, sceneBounds, bgLinear, 0);
+    CRTVector linearColor = traceRay(ray, accel, lights, materials, textures, bgLinear, 0);
     return CRTColor::fromLinear(linearColor);
 }
 
@@ -272,13 +313,25 @@ inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& tr
                          RenderMode mode = RenderMode::Shaded,
                          int bucketSize = 32,
                          bool useAABB = true,
-                         int threadCount = 0) {
-    AABB sceneBounds = useAABB ? computeSceneBounds(triangles) : AABB{};
-    if (!useAABB) {
-        // Wide-open bounds so the AABB.intersect() check never rejects a ray.
-        sceneBounds.min = CRTVector(-1e9f, -1e9f, -1e9f);
-        sceneBounds.max = CRTVector(1e9f, 1e9f, 1e9f);
+                         int threadCount = 0,
+                         bool useBVH = true) {
+    SceneAccel accel;
+    accel.triangles = &triangles;
+    accel.useBVH = useBVH;
+
+    BVH bvh;
+    if (useBVH) {
+        bvh.build(triangles);
+        accel.bvh = &bvh;
+    } else {
+        accel.flatBounds = useAABB ? computeSceneBounds(triangles) : AABB{};
+        if (!useAABB) {
+            // Wide-open bounds so the AABB check never rejects a ray.
+            accel.flatBounds.min = CRTVector(-1e9f, -1e9f, -1e9f);
+            accel.flatBounds.max = CRTVector(1e9f, 1e9f, 1e9f);
+        }
     }
+
     CRTVector bgLinear(backgroundColor.r / 255.0f, backgroundColor.g / 255.0f, backgroundColor.b / 255.0f);
 
     std::vector<CRTColor> pixels(static_cast<size_t>(width) * height);
@@ -304,8 +357,8 @@ inline void renderScene(const Camera& camera, const std::vector<CRTTriangle>& tr
             for (int rowIdx = bucket.yStart; rowIdx < bucket.yEnd; ++rowIdx) {
                 for (int colIdx = bucket.xStart; colIdx < bucket.xEnd; ++colIdx) {
                     CRTColor pixelColor = shadePixel(camera, colIdx, rowIdx, width, height,
-                                                      triangles, lights, materials, textures,
-                                                      sceneBounds, backgroundColor, bgLinear, mode);
+                                                      accel, lights, materials, textures,
+                                                      backgroundColor, bgLinear, mode);
                     pixels[static_cast<size_t>(rowIdx) * width + colIdx] = pixelColor;
                 }
             }

@@ -1,0 +1,24 @@
+HW14 - Optimizations 02: acceleration tree (BVH)
+Test machine: 1 CPU core (same as HW13 measurements)
+
+BVH: median-split binary tree, split axis = longest axis of the node's bounding
+box, leaf threshold = 4 triangles, built once per render before tracing starts.
+"Before" numbers below already include the AABB + multithreading optimizations
+from HW13 (i.e. this measures the BVH's improvement on top of the previous
+best setup, not from scratch).
+
+scene0.crtscene - 8 triangles, 1920x1080
+  before (flat AABB scan): 0.653s
+  after  (BVH):            0.571s
+  (negligible geometry count, BVH build overhead roughly cancels the gain)
+
+scene1.crtscene - 4014 triangles, 1920x1080
+  before (flat AABB scan): 185.13s
+  after  (BVH):            2.92s
+  speedup: ~63x
+
+Both renders (before/after) are pixel-identical except for ~200 pixels out of
+2+ million along a single edge where two coplanar triangles from adjacent
+Cornell-box walls tie at the same intersection distance - which of the two
+wins is an ordering artifact independent of BVH vs. linear scan, not a
+correctness bug (verified by direct A/B render comparison with the same code).

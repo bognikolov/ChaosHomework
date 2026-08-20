@@ -23,10 +23,26 @@ struct AABB {
         expand(tri.v2);
     }
 
-    // Slab method. Returns true if the ray intersects the box before tMax.
-    bool intersect(const Ray& ray) const {
+    void expand(const AABB& other) {
+        expand(other.min);
+        expand(other.max);
+    }
+
+    CRTVector centroid() const {
+        return (min + max) * 0.5f;
+    }
+
+    // Longest axis: 0=x, 1=y, 2=z. Used to pick the BVH split axis.
+    int longestAxis() const {
+        CRTVector extent = max - min;
+        if (extent.x > extent.y && extent.x > extent.z) return 0;
+        if (extent.y > extent.z) return 1;
+        return 2;
+    }
+
+    // Slab method. tMax caps how far along the ray we care (e.g. distance to a light).
+    bool intersect(const Ray& ray, float tMax = std::numeric_limits<float>::max()) const {
         float tMin = 0.0f;
-        float tMax = std::numeric_limits<float>::max();
 
         for (int axis = 0; axis < 3; ++axis) {
             float origin = (axis == 0) ? ray.origin.x : (axis == 1) ? ray.origin.y : ray.origin.z;

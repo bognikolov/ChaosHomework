@@ -207,7 +207,7 @@ void runHw13(const std::string& scenePath, const std::string& outDir) {
         auto start = std::chrono::steady_clock::now();
         renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
                     scene.backgroundColor, outDir + "/" + outName, scene.lights, scene.materials,
-                    scene.textures, RenderMode::Shaded, bucketSize, useAABB, threadCount);
+                    scene.textures, RenderMode::Shaded, bucketSize, useAABB, threadCount, /*useBVH=*/false);
         auto end = std::chrono::steady_clock::now();
         double seconds = std::chrono::duration<double>(end - start).count();
         std::cout << label << ": " << seconds << "s\n";
@@ -228,6 +228,39 @@ void runHw13(const std::string& scenePath, const std::string& outDir) {
     std::cout << "\nHW13 - Optimizations 01: done\n";
 }
 
+// HW14: measures render time before/after replacing the flat triangle scan
+// with a BVH. Uses the previous best config (AABB + multithreading) as the
+// "before" baseline, since that's what a real renderer would already have.
+void runHw14(const std::string& scenesDir, const std::string& outDir) {
+    std::vector<std::string> sceneFiles = { "scene0.crtscene", "scene1.crtscene" };
+
+    for (const std::string& file : sceneFiles) {
+        SceneData scene = loadScene(scenesDir + "/" + file);
+        std::cout << file << ": " << scene.triangles.size() << " triangles, "
+                  << scene.imageWidth << "x" << scene.imageHeight << "\n";
+
+        std::string base = file.substr(0, file.find(".crtscene"));
+
+        auto start = std::chrono::steady_clock::now();
+        renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
+                    scene.backgroundColor, outDir + "/" + base + "_before_bvh.ppm",
+                    scene.lights, scene.materials, scene.textures, RenderMode::Shaded,
+                    scene.bucketSize, /*useAABB=*/true, /*threadCount=*/0, /*useBVH=*/false);
+        auto mid = std::chrono::steady_clock::now();
+        renderScene(scene.camera, scene.triangles, scene.imageWidth, scene.imageHeight,
+                    scene.backgroundColor, outDir + "/" + base + "_after_bvh.ppm",
+                    scene.lights, scene.materials, scene.textures, RenderMode::Shaded,
+                    scene.bucketSize, /*useAABB=*/true, /*threadCount=*/0, /*useBVH=*/true);
+        auto end = std::chrono::steady_clock::now();
+
+        double beforeSeconds = std::chrono::duration<double>(mid - start).count();
+        double afterSeconds = std::chrono::duration<double>(end - mid).count();
+        std::cout << "  before (flat AABB scan): " << beforeSeconds << "s\n";
+        std::cout << "  after  (BVH):            " << afterSeconds << "s\n\n";
+    }
+    std::cout << "HW14 - Optimizations 02: done\n";
+}
+
 void printUsage() {
     std::cout << "Usage:\n"
               << "  ChaosRayTracer rays\n"
@@ -238,7 +271,8 @@ void printUsage() {
               << "  ChaosRayTracer hw09 <scenes_dir> <output_dir>\n"
               << "  ChaosRayTracer hw11 <scenes_dir> <output_dir>\n"
               << "  ChaosRayTracer hw12 <scenes_dir> <output_dir>\n"
-              << "  ChaosRayTracer hw13 <scene.crtscene> <output_dir>\n";
+              << "  ChaosRayTracer hw13 <scene.crtscene> <output_dir>\n"
+              << "  ChaosRayTracer hw14 <scenes_dir> <output_dir>\n";
 }
 
 int main(int argc, char** argv) {
@@ -287,6 +321,12 @@ int main(int argc, char** argv) {
             return 1;
         }
         runHw13(argv[2], argv[3]);
+    } else if (command == "hw14") {
+        if (argc < 4) {
+            std::cout << "hw14 command requires <scenes_dir> <output_dir>\n";
+            return 1;
+        }
+        runHw14(argv[2], argv[3]);
     } else {
         printUsage();
         return 1;
